@@ -1,0 +1,21 @@
+[submodule "auth-service"]
+	path = auth-service
+	url = https://github.com/gfreee333/Auth-Service.git
+[submodule "account-service"]
+	path = account-service
+	url = https://github.com/gfreee333/Account-Service.git
+[submodule "api-gateway"]
+	path = api-gateway
+	url = https://github.com/gfreee333/Api-Gateway.git
+[submodule "config-service"]
+	path = config-service
+	url = https://github.com/gfreee333/Config-Service.git
+[submodule "discovery-service"]
+	path = discovery-service
+	url = https://github.com/gfreee333/Discovery-Service.git
+[submodule "notification-service"]
+	path = notification-service
+	url = https://github.com/gfreee333/Notification-Service.git
+[submodule "banking-config"]
+	path = banking-config
+	url = https://github.com/gfreee333/Banking-Config.git
