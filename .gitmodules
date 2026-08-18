@@ -19,3 +19,6 @@
 [submodule "banking-config"]
 	path = banking-config
 	url = https://github.com/gfreee333/Banking-Config.git
+[submodule "common-jwt-library"]
+	path = common-jwt-library
+	url = https://github.com/gfreee333/Common-Jwt-Library.git
