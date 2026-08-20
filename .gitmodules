@@ -22,3 +22,6 @@
 [submodule "common-jwt-library"]
 	path = common-jwt-library
 	url = https://github.com/gfreee333/Common-Jwt-Library.git
+[submodule "outbox-library"]
+	path = outbox-library
+	url = https://github.com/gfreee333/Outbox-Library.git
