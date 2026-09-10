@@ -1,0 +1,10 @@
+**/.git
+**/.idea
+**/*.iml
+.gitmodules
+*.png
+README.md
+Docker-compose.yaml
+.mvn
+mvnw
+mvnw.cmd

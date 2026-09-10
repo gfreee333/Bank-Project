@@ -1,6 +1,6 @@
 version: '3.8'
 networks:
-  bank-networks:
+  bank-network:
     driver: bridge
 volumes:
   postgres-auth-data:
@@ -12,6 +12,7 @@ volumes:
   redis-gateway-data:
   kafka-data:
 services:
+
   postgres-auth:
     image: postgres:15-alpine
     container_name: bank-postgres-auth
@@ -31,6 +32,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   postgres-notification:
     image: postgres:15-alpine
     container_name: bank-postgres-notification
@@ -50,6 +52,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   postgres-account:
     image: postgres:15-alpine
     container_name: bank-postgres-account
@@ -69,11 +72,12 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   postgres-transaction:
     image: postgres:15-alpine
     container_name: bank-postgres-transaction
     environment:
-      POSTGRES_NAME: dev
+      POSTGRES_USER: dev
       POSTGRES_PASSWORD: dev123
       POSTGRES_DB: transaction_db
     ports:
@@ -86,11 +90,12 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   postgres-deposit:
     image: postgres:15-alpine
     container_name: bank-postgres-deposit
     environment:
-      POSTGRES_NAME: dev
+      POSTGRES_USER: dev
       POSTGRES_PASSWORD: dev123
       POSTGRES_DB: deposit_db
     ports:
@@ -103,6 +108,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   redis-auth:
     image: redis:7.2-alpine
     container_name: bank-redis-auth
@@ -119,6 +125,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   redis-gateway:
     image: redis:7.2-alpine
     container_name: bank-redis-gateway
@@ -126,7 +133,7 @@ services:
     ports:
       - "6380:6379"
     volumes:
-      - redis-api-gateway:/data
+      - redis-gateway-data:/data
     networks:
       - bank-network
     healthcheck:
@@ -135,6 +142,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
   kafka-server:
     image: apache/kafka:3.8.0
     container_name: bank-kafka-broker
@@ -144,18 +152,293 @@ services:
       KAFKA_NODE_ID: 0
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-server:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 0@localhost:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 0@kafka-server:9093
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    networks:
+      - bank-network
     healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list" ]
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-server:9092 --list" ]
       interval: 10s
       timeout: 10s
       retries: 10
+    restart: unless-stopped
+
+  discovery-service:
+    build:
+      context: .
+      dockerfile: discovery-service/Dockerfile
+    container_name: bank-discovery-service
+    ports:
+      - "8761:8761"
+    networks:
+      - bank-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8761/actuator/health | grep -qE '200|401|403' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  config-service:
+    build:
+      context: .
+      dockerfile: config-service/Dockerfile
+    container_name: bank-config-service
+    ports:
+      - "8880:8880"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8880/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: bank-api-gateway
+    ports:
+      - "8092:8092"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLED: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      REDIS_HOST: redis-gateway
+      REDIS_PORT: 6380
+      REDIS_PASSWORD: redis123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+      redis-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8092/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    container_name: bank-auth-service
+    ports:
+      - "8090:8090"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLE: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      POSTGRES_URL: jdbc:postgresql://postgres-auth:5432/auth_db
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev123
+      REDIS_HOST: redis-auth
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redis123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      postgres-auth:
+        condition: service_healthy
+      redis-auth:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
+    restart: unless-stopped
+
+  account-service:
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
+    container_name: bank-account-service
+    ports:
+      - "8094:8094"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLE: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      POSTGRES_URL: jdbc:postgresql://postgres-account:5432/account_db
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+      postgres-account:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8094/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
+    restart: unless-stopped
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: transaction-service/Dockerfile
+    container_name: bank-transaction-service
+    ports:
+      - "8095:8095"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLE: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      POSTGRES_URL: jdbc:postgresql://postgres-transaction:5432/transaction_db
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+      postgres-transaction:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8095/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
+    restart: unless-stopped
+
+  deposit-service:
+    build:
+      context: .
+      dockerfile: deposit-service/Dockerfile
+    container_name: bank-deposit-service
+    ports:
+      - "8096:8096"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLE: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      POSTGRES_URL: jdbc:postgresql://postgres-deposit:5432/deposit_db
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+      postgres-account:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8096/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: bank-notification-service
+    ports:
+      - "8093:8093"
+    environment:
+      EUREKA_URL: http://eureka:eureka123@discovery-service:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka-server:9092
+      CONFIG_DISCOVERY_ENABLE: "true"
+      CONFIG_SERVICE_ID: config-service
+      CONFIG_USERNAME: config
+      CONFIG_PASSWORD: config123
+      POSTGRES_URL: jdbc:postgresql://postgres-notification:5432/notification_db
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev123
+    networks:
+      - bank-network
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+      config-service:
+        condition: service_healthy
+      kafka-server:
+        condition: service_healthy
+      postgres-notification:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8093/actuator/health | grep -qE '200|401|403' || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 180s
     restart: unless-stopped
