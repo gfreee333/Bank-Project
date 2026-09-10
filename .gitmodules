@@ -25,3 +25,9 @@
 [submodule "outbox-library"]
 	path = outbox-library
 	url = https://github.com/gfreee333/Outbox-Library.git
+[submodule "deposit-service"]
+	path = deposit-service
+	url = https://github.com/gfreee333/Deposit-Service.git
+[submodule "transaction-service"]
+	path = transaction-service
+	url = https://github.com/gfreee333/Transaction-Service.git
